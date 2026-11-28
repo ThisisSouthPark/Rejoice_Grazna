@@ -156,11 +156,17 @@ public class PlayerMotor : MonoBehaviour
             move = Vector3.ProjectOnPlane(horizontalVelocity, groundNormal);
 
         controller.Move((move + Vector3.up * verticalVelocity) * dt);
+    }
 
-        // 벽에 부딪히면 해당 방향 속도 제거 (벽 비비며 관성 남는 현상 방지)
-        Vector3 actual = controller.velocity; actual.y = 0f;
-        if (actual.sqrMagnitude < horizontalVelocity.sqrMagnitude * 0.25f && IsGrounded)
-            horizontalVelocity = Vector3.MoveTowards(horizontalVelocity, actual, 30f * dt);
+    // 벽에 부딪히면 벽 방향 속도 성분만 제거 (벽에 비비며 관성이 남는 현상 방지)
+    void OnControllerColliderHit(ControllerColliderHit hit)
+    {
+        if (hit.normal.y > 0.3f) return;              // 바닥/완만한 경사는 무시
+        Vector3 n = hit.normal; n.y = 0f;
+        if (n.sqrMagnitude < 0.0001f) return;
+        n.Normalize();
+        float into = Vector3.Dot(horizontalVelocity, n);
+        if (into < 0f) horizontalVelocity -= n * into;
     }
 
     // ───────────────────────── Ground ─────────────────────────
@@ -174,7 +180,16 @@ public class PlayerMotor : MonoBehaviour
             groundCheckDistance + 0.05f, groundMask, QueryTriggerInteraction.Ignore);
 
         IsGrounded = hitGround && verticalVelocity <= 0.01f;
-        groundNormal = hitGround ? hit.normal : Vector3.up;
+
+        groundNormal = Vector3.up;
+        if (hitGround)
+        {
+            groundNormal = hit.normal;
+            // SphereCast의 normal은 모서리에서 기울어질 수 있어서 레이로 실제 면의 노멀을 다시 구함
+            if (Physics.Raycast(hit.point + Vector3.up * 0.1f, Vector3.down, out RaycastHit rh, 0.3f,
+                    groundMask, QueryTriggerInteraction.Ignore))
+                groundNormal = rh.normal;
+        }
         groundAngle = Vector3.Angle(groundNormal, Vector3.up);
     }
 
@@ -220,10 +235,13 @@ public class PlayerMotor : MonoBehaviour
 
     bool CanStandUp()
     {
+        float extra = standHeight - controller.height;
+        if (extra <= 0.01f) return true;
+
+        // 현재 캡슐 머리 위로 늘어날 높이만큼 위쪽을 스피어캐스트 (시작 지점이 겹친 자기 콜라이더는 무시됨)
         float r = controller.radius * 0.95f;
-        Vector3 p1 = transform.position + Vector3.up * r;
-        Vector3 p2 = transform.position + Vector3.up * (standHeight - r);
-        return !Physics.CheckCapsule(p1, p2, r, groundMask, QueryTriggerInteraction.Ignore);
+        Vector3 top = transform.position + Vector3.up * (controller.height - r);
+        return !Physics.SphereCast(top, r, Vector3.up, out _, extra + 0.02f, groundMask, QueryTriggerInteraction.Ignore);
     }
 
     // ───────────────────────── Stamina ─────────────────────────
@@ -338,7 +356,8 @@ public class PlayerMotor : MonoBehaviour
 #if UNITY_EDITOR
     void OnGUI()
     {
-        GUILayout.BeginArea(new Rect(10, 10, 260, 120), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(10, 10, 300, 150), GUI.skin.box);
+        GUILayout.Label($"Input: {moveInput}");
         GUILayout.Label($"Speed: {HorizontalSpeed:F2} m/s");
         GUILayout.Label($"Grounded: {IsGrounded}  Sprint: {IsSprinting}  Crouch: {IsCrouching}");
         GUILayout.Label($"Stamina: {stamina:F0}/{maxStamina:F0}  Slope: {groundAngle:F0}°");
